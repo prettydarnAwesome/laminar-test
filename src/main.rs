@@ -1,109 +1,57 @@
-//! Note that the terms "client" and "server" here are purely what we logically associate with them.
-//! Technically, they both work the same.
-//! Note that in practice you don't want to implement a chat client using UDP.
+use std::net;
 use std::io::stdin;
-use std::thread;
-use std::time::Instant;
+use std::str;
 
-use laminar::{ErrorKind, Packet, Socket, SocketEvent};
+const SERVER: &str = "127.0.0.1:27016";
 
-const SERVER: &str = "127.0.0.1:3000";
+const SERVER_BIND: &str = "127.0.0.1:27016";
+const LOCAL_BIND: &str = "127.0.0.1:27015";
 
-fn server() -> Result<(), ErrorKind> {
-    let mut socket = Socket::bind(SERVER)?;
-    let (sender, receiver) = (socket.get_packet_sender(), socket.get_event_receiver());
-    let _thread = thread::spawn(move || socket.start_polling());
-
-    loop {
-        if let Ok(event) = receiver.recv() {
-            match event {
-                SocketEvent::Packet(packet) => {
-                    let msg = packet.payload();
-
-                    if msg == b"Bye!" {
-                        break;
-                    }
-
-                    let msg = String::from_utf8_lossy(msg);
-                    let ip = packet.addr().ip();
-
-                    println!("Received {:?} from {:?}", msg, ip);
-
-                    sender
-                        .send(Packet::reliable_unordered(
-                            packet.addr(),
-                            "Copy that!".as_bytes().to_vec(),
-                        ))
-                        .expect("This should send");
-                }
-                SocketEvent::Timeout(address) => {
-                    println!("Client timed out: {}", address);
-                }
-                _ => {}
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn client() -> Result<(), ErrorKind> {
-    let addr = "localip:3000";
-    let mut socket = Socket::bind(addr)?;
-    println!("Connected on {}", addr);
-
-    let server = SERVER.parse().unwrap();
-
-    println!("Type a message and press Enter to send. Send `Bye!` to quit.");
-
+fn client() {
     let stdin = stdin();
-    let mut s_buffer = String::new();
+
+    let mut socket = net::UdpSocket::bind(LOCAL_BIND).expect("couldn't bind to address!");
+    socket.connect(SERVER).expect("couldn't connect to server");
 
     loop {
-        s_buffer.clear();
-        stdin.read_line(&mut s_buffer)?;
-        let line = s_buffer.replace(|x| x == '\n' || x == '\r', "");
+        let mut s = String::new();
+        stdin.read_line(&mut s);
 
-        socket.send(Packet::reliable_unordered(
-            server,
-            line.clone().into_bytes(),
-        ))?;
-
-        socket.manual_poll(Instant::now());
-
-        if line == "Bye!" {
-            break;
-        }
-
-        match socket.recv() {
-            Some(SocketEvent::Packet(packet)) => {
-                if packet.addr() == server {
-                    println!("Server sent: {}", String::from_utf8_lossy(packet.payload()));
-                } else {
-                    println!("Unknown sender.");
-                }
-            }
-            Some(SocketEvent::Timeout(_)) => {}
-            _ => println!("Silence.."),
-        }
+        socket.send(s.as_bytes()).expect("couldn't send data");
     }
 
-    Ok(())
+    // let mut buf = [0; 100];
+    // match socket.recv(&mut buf) {
+    //     Ok(received) => println!("received {} bytes {:?}", received, &buf[..received]),
+    //     Err(e) => println!("recv function failed: {:?}", e),
+    // }
 }
 
-fn main() -> Result<(), ErrorKind> {
+fn server() {
+    let mut socket = net::UdpSocket::bind(SERVER_BIND).expect("couldn't bind to address!");
+
+    let mut buf = [0; 100];
+    loop {
+        match socket.recv(&mut buf) {
+            Ok(received) => println!("received {} bytes {:?}", received, str::from_utf8(&buf[..received])),
+            Err(e) => println!("recv function failed: {:?}", e),
+        }
+    }
+}
+
+fn main() {
     let stdin = stdin();
 
     println!("Please type in `server` or `client`.");
 
     let mut s = String::new();
-    stdin.read_line(&mut s)?;
+    stdin.read_line(&mut s);
 
     if s.starts_with("s") {
         println!("Starting server..");
-        server()
+        server();
     } else {
         println!("Starting client..");
-        client()
+        client();
     }
 }
